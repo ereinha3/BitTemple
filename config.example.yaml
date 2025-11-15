@@ -1,0 +1,41 @@
+server:
+  host: 0.0.0.0
+  port: 8080
+  data_root: /var/lib/bitharbor
+  pool_root: /mnt/pool
+
+db:
+  url: sqlite+aiosqlite:////var/lib/bitharbor/bitharbor.sqlite
+  echo: false
+
+security:
+  secret_key: changeme
+  algorithm: HS256
+  access_token_expire_minutes: 1440
+
+embedding:
+  model_name: imagebind_huge
+  device: auto
+  dim: 1024
+  video_frames: 8
+  fuse_poster_weight: 0.2
+  round_eps: 1.0e-6
+
+ann:
+  type: hnsw
+  m: 32
+  ef_construction: 200
+  ef_search: 128
+  refine_candidates: 128
+  refine_top_k: 20
+  vectors_path: /var/lib/bitharbor/index/vectors.fp32
+  index_path: /var/lib/bitharbor/index/hnsw.index
+
+ingest:
+  allow_ext:
+    video: [".mp4", ".mov", ".mkv", ".avi"]
+    image: [".jpg", ".jpeg", ".png", ".webp", ".heic"]
+    audio: [".mp3", ".flac", ".m4a", ".wav", ".ogg"]
+  thumb_width: 512
+  preview_seconds: 3
+
