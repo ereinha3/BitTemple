@@ -1,10 +1,29 @@
 import asyncio
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from db.base import Base
 from db.models import Movie
-from features.movies.router import _fetch_all_movies
+from features.movies.router import _fetch_all_movies, _parse_range
+
+
+def test_parse_range_defaults_to_full_file():
+    assert _parse_range(None, 100) == (0, 99)
+
+
+def test_parse_range_with_explicit_bounds():
+    assert _parse_range("bytes=10-19", 100) == (10, 19)
+
+
+def test_parse_range_suffix():
+    assert _parse_range("bytes=-10", 100) == (90, 99)
+
+
+def test_parse_range_invalid_raises():
+    with pytest.raises(HTTPException):
+        _parse_range("invalid", 100)
 
 
 def test_fetch_all_movies_returns_movie_metadata(tmp_path):

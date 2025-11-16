@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import mimetypes
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -72,6 +74,106 @@ async def _fetch_all_movies(session: AsyncSession) -> list[MovieMedia]:
 @router.get("/all", response_model=list[MovieMedia])
 async def list_all_movies(session: AsyncSession = Depends(get_session)) -> list[MovieMedia]:
     return await _fetch_all_movies(session)
+
+
+def _parse_range(range_header: str | None, file_size: int) -> tuple[int, int]:
+    if not range_header:
+        return 0, file_size - 1
+
+    if "=" not in range_header:
+        raise HTTPException(status_code=416, detail="Invalid Range header format")
+
+    unit, byte_range = range_header.strip().split("=", 1)
+    if unit != "bytes":
+        raise HTTPException(status_code=416, detail="Unsupported range unit")
+
+    first_range = byte_range.split(",")[0].strip()
+    if "-" not in first_range:
+        raise HTTPException(status_code=416, detail="Invalid Range header format")
+
+    start_str, end_str = first_range.split("-", 1)
+    if start_str == "":
+        # suffix-byte-range-spec: bytes=-N
+        try:
+            length = int(end_str)
+        except ValueError as exc:  # pragma: no cover - defensive
+            raise HTTPException(status_code=416, detail="Invalid range values") from exc
+        if length <= 0:
+            raise HTTPException(status_code=416, detail="Invalid range values")
+        start = max(file_size - length, 0)
+        end = file_size - 1
+    else:
+        try:
+            start = int(start_str)
+        except ValueError as exc:
+            raise HTTPException(status_code=416, detail="Invalid range values") from exc
+        if end_str:
+            try:
+                end = int(end_str)
+            except ValueError as exc:
+                raise HTTPException(status_code=416, detail="Invalid range values") from exc
+        else:
+            end = file_size - 1
+
+        if start >= file_size:
+            raise HTTPException(status_code=416, detail="Range start out of bounds")
+        end = min(end, file_size - 1)
+        if start > end:
+            raise HTTPException(status_code=416, detail="Invalid range values")
+
+    return start, end
+
+
+def _iter_file(path: Path, start: int, end: int, chunk_size: int = 1024 * 1024):
+    with path.open("rb") as file_obj:
+        file_obj.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            chunk = file_obj.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+@router.get("/stream")
+async def stream_movie(
+    file_hash: str,
+    range_header: str | None = Header(None, alias="Range"),
+    session: AsyncSession = Depends(get_session),
+):
+    stmt = select(Movie).where(Movie.file_hash == file_hash)
+    movie = await session.scalar(stmt)
+    if movie is None:
+        raise HTTPException(status_code=404, detail="Movie not found")
+
+    if not movie.path:
+        raise HTTPException(status_code=404, detail="Movie file path unknown")
+
+    file_path = Path(movie.path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Movie file not found on disk")
+
+    file_size = file_path.stat().st_size
+    if file_size == 0:
+        raise HTTPException(status_code=404, detail="Movie file is empty")
+
+    start, end = _parse_range(range_header, file_size)
+    headers = {"Accept-Ranges": "bytes"}
+    status_code = 206 if range_header else 200
+    content_length = end - start + 1
+    headers["Content-Length"] = str(content_length)
+
+    if status_code == 206:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+
+    media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    return StreamingResponse(
+        _iter_file(file_path, start, end),
+        media_type=media_type,
+        status_code=status_code,
+        headers=headers,
+    )
 
 
 @router.post("/catalog/download", response_model=CatalogDownloadResponse)
