@@ -31,6 +31,8 @@ class CatalogService:
         session: AsyncSession,
         identifier: str,
         *,
+        search_title: Optional[str] = None,
+        search_year: Optional[int] = None,
         download_dir: Path | None = None,
         source_type: str = "catalog",
         cleanup_after_ingest: bool = True,
@@ -41,12 +43,15 @@ class CatalogService:
         This method orchestrates the complete workflow:
         1. Download video, poster, and metadata from archive.org
         2. Extract metadata from Internet Archive
-        3. Ingest the video file (triggers TMDb enrichment)
-        4. Optionally clean up downloaded files
+        3. Use search metadata (if provided) for better TMDb matching
+        4. Ingest the video file (triggers TMDb enrichment)
+        5. Optionally clean up downloaded files
 
         Args:
             session: Database session for ingestion
             identifier: Internet Archive item identifier (e.g., "fantastic-planet__1973")
+            search_title: Movie title from search results (helps TMDb matching)
+            search_year: Release year from search results (helps TMDb matching)
             download_dir: Directory for temporary downloads (default: /tmp/bitharbor-downloads)
             source_type: Media source type ("catalog" or "home")
             cleanup_after_ingest: Whether to delete downloaded files after successful ingest
@@ -87,9 +92,18 @@ class CatalogService:
 
             # Step 2: Extract metadata from Internet Archive
             metadata = self._extract_ia_metadata(bundle)
+            
+            # Step 3: Override with search metadata if provided (better for TMDb matching)
+            if search_title:
+                logger.info(f"Using search title for TMDb matching: {search_title}")
+                metadata["title"] = search_title
+            if search_year:
+                logger.info(f"Using search year for TMDb matching: {search_year}")
+                metadata["year"] = search_year
+                
             logger.info(f"Extracted metadata: title='{metadata.get('title')}', year={metadata.get('year')}")
 
-            # Step 3: Build ingest request
+            # Step 4: Build ingest request
             ingest_request = IngestRequest(
                 path=str(bundle.video_path),
                 media_type="movie",
@@ -98,7 +112,7 @@ class CatalogService:
                 poster_path=str(bundle.cover_art_path) if bundle.cover_art_path else None,
             )
 
-            # Step 4: Ingest the video (includes TMDb enrichment, embedding, indexing)
+            # Step 5: Ingest the video (includes TMDb enrichment, embedding, indexing)
             logger.info(f"Ingesting movie into BitHarbor: {bundle.video_path}")
             result = await self.ingest_service.ingest(session, ingest_request)
 
@@ -107,7 +121,7 @@ class CatalogService:
                 f"media_id={result.media_id}, identifier={identifier}"
             )
 
-            # Step 5: Cleanup downloaded files if requested
+            # Step 6: Cleanup downloaded files if requested
             if cleanup_after_ingest:
                 self._cleanup_downloads(bundle, download_dir)
 

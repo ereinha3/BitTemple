@@ -34,19 +34,24 @@ async def ingest_from_internet_archive(
     This endpoint orchestrates the complete workflow:
     1. Downloads video, poster, and metadata from archive.org
     2. Extracts and maps Internet Archive metadata
-    3. Ingests into BitHarbor (includes TMDb enrichment)
-    4. Adds to vector search index
-    5. Optionally cleans up downloaded files
+    3. Uses search metadata (title/year) for better TMDb matching
+    4. Ingests into BitHarbor (includes TMDb enrichment)
+    5. Adds to vector search index
+    6. Optionally cleans up downloaded files
 
     The ingested movie will be immediately searchable and enriched with:
     - Internet Archive metadata (title, year, description)
     - TMDb enrichment (cast, crew, ratings, posters, genres)
     - ImageBind embeddings (for semantic search)
+    
+    **Tip:** Pass `title` and `year` from the search results for better TMDb matching.
 
     Example:
         ```json
         {
             "identifier": "fantastic-planet__1973",
+            "title": "Fantastic Planet",
+            "year": 1973,
             "cleanup_after_ingest": true
         }
         ```
@@ -65,6 +70,8 @@ async def ingest_from_internet_archive(
         result = await catalog_service.ingest_from_internet_archive(
             session=session,
             identifier=payload.identifier,
+            search_title=payload.title,
+            search_year=payload.year,
             download_dir=download_dir,
             source_type=payload.source_type,
             cleanup_after_ingest=payload.cleanup_after_ingest,
@@ -93,6 +100,13 @@ async def search_internet_archive(
 
     Search for public domain movies available for download from archive.org.
     Results can be filtered by language, year, and sorted by downloads or other criteria.
+    
+    **Duplicate Handling:**
+    When multiple versions of the same movie exist, results are ranked by:
+    - Download count (popularity)
+    - Average user rating (quality)
+    
+    The highest-scoring version appears first.
 
     Example:
         ```json
@@ -114,18 +128,23 @@ async def search_internet_archive(
     """
     try:
         ia_client = InternetArchiveClient()
+        
+        # Apply default sorting if not provided
+        sorts = payload.sorts or ["downloads desc", "avg_rating desc"]
+        
         search_results = list(
             ia_client.search_movies(
                 title=payload.query,
                 rows=payload.rows,
                 enrich=True,  # Fetch detailed metadata
-                sorts=payload.sorts,
+                sorts=sorts,
                 filters=payload.filters,
             )
         )
 
-        # Map to response schema
-        results = []
+        # Map to response schema and deduplicate
+        seen_titles: dict[tuple[str, str], CatalogSearchResult] = {}  # (title, year) -> best result
+        
         for result in search_results:
             metadata = result.metadata
             item_metadata = metadata.get("item_metadata", {}).get("metadata", {})
@@ -146,16 +165,34 @@ async def search_internet_archive(
             if description:
                 description = str(description)[:500]  # Truncate for preview
 
-            results.append(
-                CatalogSearchResult(
-                    identifier=result.identifier,
-                    title=result.title,
-                    year=year,
-                    description=description,
-                    downloads=metadata.get("downloads"),
-                    item_size=metadata.get("item_size"),
-                )
+            # Extract rating information
+            avg_rating = metadata.get("avg_rating")
+            num_reviews = metadata.get("num_reviews")
+            
+            catalog_result = CatalogSearchResult(
+                identifier=result.identifier,
+                title=result.title,
+                year=year,
+                description=description,
+                downloads=metadata.get("downloads"),
+                item_size=metadata.get("item_size"),
+                avg_rating=avg_rating,
+                num_reviews=num_reviews,
             )
+            
+            # Deduplicate: Keep the best version of each movie
+            title_key = (result.title or "unknown", year or "unknown")
+            
+            if title_key not in seen_titles:
+                seen_titles[title_key] = catalog_result
+            else:
+                # Compare scores and keep the better one
+                existing = seen_titles[title_key]
+                if catalog_result.score > existing.score:
+                    seen_titles[title_key] = catalog_result
+        
+        # Convert back to list and sort by score
+        results = sorted(seen_titles.values(), key=lambda r: r.score, reverse=True)
 
         return CatalogSearchResponse(
             results=results,
