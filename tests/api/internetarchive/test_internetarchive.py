@@ -13,6 +13,7 @@ from api.catalog.internetarchive import (
     InternetArchiveDownloadError,
     InternetArchiveSearchResult,
     MovieAssetBundle,
+    MovieAssetPlan,
     MovieSearchOptions,
 )
 
@@ -235,4 +236,29 @@ def test_collect_movie_assets_selects_expected_files(tmp_path: Path, patch_get_s
     assert bundle.metadata_xml_path == target_dir / "SampleFilm_meta.xml"
     assert bundle.subtitle_paths == (target_dir / "SampleFilm.srt",)
     assert bundle.metadata == metadata_payload
+
+
+def test_plan_movie_download_returns_expected_structure(patch_get_session: DummySession) -> None:
+    identifier = "plan_item"
+    metadata_payload = {
+        "metadata": {"title": "Plan Item"},
+        "files": [
+            {"name": "PlanItem.mp4", "source": "original"},
+            {"name": "PlanItem_meta.xml"},
+            {"name": "__ia_thumb.jpg", "format": "Item Tile"},
+            {"name": "PlanItem.srt"},
+        ],
+    }
+    patch_get_session.items = {identifier: metadata_payload}
+
+    client = InternetArchiveClient()
+    plan = client.plan_movie_download(identifier)
+
+    assert isinstance(plan, MovieAssetPlan)
+    assert plan.identifier == identifier
+    assert plan.video_file == "PlanItem.mp4"
+    assert plan.metadata_xml_file == "PlanItem_meta.xml"
+    assert plan.cover_art_file == "__ia_thumb.jpg"
+    assert plan.subtitle_files == ("PlanItem.srt",)
+    assert plan.normalized_metadata.title == "Plan Item"
 

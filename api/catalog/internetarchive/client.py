@@ -72,6 +72,20 @@ class InternetArchiveSearchResult:
 
 
 @dataclass(slots=True, frozen=True)
+class MovieAssetPlan:
+    """Description of which remote files we intend to download."""
+
+    identifier: str
+    title: str | None
+    metadata: Mapping[str, Any]
+    video_file: str | None
+    metadata_xml_file: str | None
+    cover_art_file: str | None
+    subtitle_files: tuple[str, ...]
+    normalized_metadata: MovieMedia | None
+
+
+@dataclass(slots=True, frozen=True)
 class MovieAssetBundle:
     """Local artefacts produced by ``download_movie``."""
 
@@ -158,27 +172,20 @@ class InternetArchiveClient:
         self,
         identifier: str,
         *,
-        destination: Path,
+        destination: Path | None = None,
         options: MovieDownloadOptions | None = None,
     ) -> MovieAssetBundle:
         """Download the primary assets for a movie."""
 
         opts = options or MovieDownloadOptions()
-        metadata = self.fetch_metadata(identifier)
-        files = metadata.get("files", []) or []
-        title = metadata.get("metadata", {}).get("title")
+        plan = self.plan_movie_download(identifier, include_subtitles=opts.include_subtitles)
 
-        video_file = self._select_video_file(files)
-        metadata_xml_file = self._select_metadata_xml(files)
-        cover_art_file = self._select_cover_art(files)
-        subtitle_files = self._select_subtitles(files) if opts.include_subtitles else []
-
-        download_map: dict[str, str] = {
-            remote: remote
-            for remote in [video_file, metadata_xml_file, cover_art_file]
-            if remote
-        }
-        for remote in subtitle_files:
+        destination = destination or Path("/home/ethan/tmp")
+        download_map: dict[str, str] = {}
+        for remote in (plan.video_file, plan.metadata_xml_file, plan.cover_art_file):
+            if remote:
+                download_map[remote] = remote
+        for remote in plan.subtitle_files:
             download_map[remote] = remote
 
         destination.mkdir(parents=True, exist_ok=True)
@@ -203,25 +210,27 @@ class InternetArchiveClient:
             return target_dir / name if name else None
 
         subtitle_paths = tuple(
-            path for path in (local_path(name) for name in subtitle_files) if path is not None
+            path
+            for path in (local_path(name) for name in plan.subtitle_files)
+            if path is not None
         )
 
         return MovieAssetBundle(
             identifier=identifier,
-            title=title,
-            metadata=metadata,
-            video_path=local_path(video_file),
-            cover_art_path=local_path(cover_art_file),
-            metadata_xml_path=local_path(metadata_xml_file),
+            title=plan.title,
+            metadata=plan.metadata,
+            video_path=local_path(plan.video_file),
+            cover_art_path=local_path(plan.cover_art_file),
+            metadata_xml_path=local_path(plan.metadata_xml_file),
             subtitle_paths=subtitle_paths,
-            normalized_metadata=map_metadata_to_movie(identifier, metadata),
+            normalized_metadata=plan.normalized_metadata,
         )
 
     def collect_movie_assets(
         self,
         identifier: str,
         *,
-        destination: Path,
+        destination: Path | None = None,
         include_subtitles: bool = True,
         checksum: bool = False,
     ) -> MovieAssetBundle:
@@ -232,6 +241,36 @@ class InternetArchiveClient:
             checksum=checksum,
         )
         return self.download_movie(identifier, destination=destination, options=options)
+
+    def plan_movie_download(
+        self,
+        identifier: str,
+        *,
+        include_subtitles: bool = True,
+    ) -> MovieAssetPlan:
+        """Plan which remote files will be downloaded for an item."""
+
+        metadata = self.fetch_metadata(identifier)
+        files = metadata.get("files", []) or []
+        title = metadata.get("metadata", {}).get("title")
+
+        video_file = self._select_video_file(files)
+        metadata_xml_file = self._select_metadata_xml(files)
+        cover_art_file = self._select_cover_art(files)
+        subtitle_files = tuple(self._select_subtitles(files) if include_subtitles else [])
+
+        normalized = map_metadata_to_movie(identifier, metadata)
+
+        return MovieAssetPlan(
+            identifier=identifier,
+            title=title,
+            metadata=metadata,
+            video_file=video_file,
+            metadata_xml_file=metadata_xml_file,
+            cover_art_file=cover_art_file,
+            subtitle_files=subtitle_files,
+            normalized_metadata=normalized,
+        )
 
     def fetch_metadata(self, identifier: str) -> Mapping[str, Any]:
         item = self.get_item(identifier)
@@ -318,11 +357,20 @@ class InternetArchiveClient:
         return year if 1800 <= year <= 2100 else None
 
     def _select_video_file(self, files: Iterable[Mapping[str, Any]]) -> str | None:
+        # Prefer original, non-derivative encodes
         for file_info in files:
             name = file_info.get("name", "")
             source = file_info.get("source")
-            if source == "original" and name.lower().endswith(VIDEO_EXTENSIONS):
+            lowered = name.lower()
+            if source == "original" and lowered.endswith(VIDEO_EXTENSIONS) and ".ia." not in lowered:
                 return name
+        # Fallback to any other non-derivative video
+        for file_info in files:
+            name = file_info.get("name", "")
+            lowered = name.lower()
+            if lowered.endswith(VIDEO_EXTENSIONS) and ".ia." not in lowered:
+                return name
+        # Final fallback: accept a derivative if that's all we have
         for file_info in files:
             name = file_info.get("name", "")
             if name.lower().endswith(VIDEO_EXTENSIONS):
