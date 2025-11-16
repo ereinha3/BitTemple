@@ -52,6 +52,7 @@ def _setup_db(tmp_path):
             hit = response.results[0]
             assert hit.movie_id == movie.id
             assert hit.media_id == str(movie.id)
+            assert hit.vector_hash == "hash1"
             assert hit.score == pytest.approx(0.95)
             assert hit.movie.title == "Test Movie"
 

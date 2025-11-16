@@ -13,7 +13,7 @@ from .auth import Admin, Participant, AdminParticipantLink
 from .ann import IdMap
 from .movie import Movie
 from .tv import TvShow, TvSeason, TvEpisode
-from .music import MusicArtist, MusicAlbum, MusicTrack
+from .music import MusicTrack
 from .podcast import PodcastShow, PodcastEpisode
 from .personal import PersonalMedia
 from .video import Video
@@ -32,8 +32,6 @@ __all__ = [
     "TvSeason",
     "TvEpisode",
     # Music
-    "MusicArtist",
-    "MusicAlbum",
     "MusicTrack",
     # Podcasts
     "PodcastShow",

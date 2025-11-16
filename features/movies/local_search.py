@@ -24,6 +24,7 @@ from infrastructure.embedding.sentence_bert_service import (
 class _ResolvedMovie:
     movie: Movie
     score: float
+    vector_hash: str | None = None
 
 
 class MovieLocalSearchService:
@@ -75,6 +76,7 @@ class MovieLocalSearchService:
                 LocalMovieSearchHit(
                     movie_id=resolved_movie.movie.id,
                     media_id=str(resolved_movie.movie.id),
+                    vector_hash=resolved_movie.vector_hash,
                     score=float(resolved_movie.score),
                     movie=movie_media,
                 )
@@ -99,31 +101,32 @@ class MovieLocalSearchService:
         if not row_ids:
             return []
 
-        stmt = select(IdMap.row_id, IdMap.media_id).where(IdMap.row_id.in_(row_ids))
+        stmt = select(IdMap.row_id, IdMap.media_id, IdMap.vector_hash).where(IdMap.row_id.in_(row_ids))
         result = await session.execute(stmt)
-        row_to_media: dict[int, int] = {}
-        for row_id, media_id in result.all():
+        row_to_media: dict[int, tuple[int, str | None]] = {}
+        for row_id, media_id, vector_hash in result.all():
             try:
-                row_to_media[row_id] = int(media_id)
+                row_to_media[row_id] = (int(media_id), vector_hash)
             except (TypeError, ValueError):
                 continue
 
         if not row_to_media:
             return []
 
-        movie_ids = list(set(row_to_media.values()))
+        movie_ids = list({media_id for media_id, _ in row_to_media.values()})
         movies_result = await session.execute(select(Movie).where(Movie.id.in_(movie_ids)))
         movie_by_id = {movie.id: movie for movie in movies_result.scalars()}
 
         ordered: list[_ResolvedMovie] = []
         for row_id, score in zip(row_ids, scores):
-            movie_id = row_to_media.get(row_id)
-            if movie_id is None:
+            mapping = row_to_media.get(row_id)
+            if mapping is None:
                 continue
+            movie_id, vector_hash = mapping
             movie = movie_by_id.get(movie_id)
             if movie is None:
                 continue
-            ordered.append(_ResolvedMovie(movie=movie, score=float(score)))
+            ordered.append(_ResolvedMovie(movie=movie, score=float(score), vector_hash=vector_hash))
         # Deduplicate by movie id while preserving order.
         seen: set[int] = set()
         unique: list[_ResolvedMovie] = []

@@ -31,6 +31,7 @@ class LocalMovieSearchHit(BaseModel):
     movie_id: int = Field(..., description="Database identifier for the movie")
     score: float = Field(..., description="Similarity score (cosine, 1.0 is best)")
     media_id: str = Field(..., description="Identifier stored in the ANN map")
+    vector_hash: str | None = Field(None, description="Deterministic hash of the stored embedding")
     movie: MovieMedia
 
 

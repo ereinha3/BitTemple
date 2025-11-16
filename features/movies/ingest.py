@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.settings import get_settings
 from db.models import IdMap, Movie
 from features.movies.vector_index import append as append_vector
+from features.movies.utils import ensure_runtime_minutes
 from infrastructure.embedding.sentence_bert_service import get_sentence_bert_service
 from utils.hashing import blake3_file
 
@@ -119,6 +120,8 @@ async def ingest_catalog_movie(
     if not poster_struct and metadata_dict.get("poster_path"):
         poster_struct = {"file_path": metadata_dict["poster_path"]}
 
+    runtime_minutes = ensure_runtime_minutes(str(stored_path), metadata_dict.get("runtime_min"))
+
     movie = Movie(
         file_hash=file_hash,
         embedding_hash=embedding.vector_hash,
@@ -134,7 +137,7 @@ async def ingest_catalog_movie(
         tagline=metadata_dict.get("tagline"),
         release_date=metadata_dict.get("release_date"),
         year=metadata_dict.get("year"),
-        runtime_min=metadata_dict.get("runtime_min"),
+        runtime_min=runtime_minutes,
         genres=metadata_dict.get("genres"),
         languages=metadata_dict.get("languages"),
         vote_average=metadata_dict.get("vote_average"),
