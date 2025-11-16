@@ -57,19 +57,22 @@ class DiskAnnIndex:
 
         dap.build_disk_index(
             data=vectors,
-            metric=self.metric,
+            distance_metric=self.metric,
             index_directory=str(self.index_directory),
-            graph_degree=self.graph_degree,
             complexity=self.complexity,
-            search_memory_budget=self.search_memory_budget,
+            graph_degree=self.graph_degree,
+            search_memory_maximum=self.search_memory_budget,
+            build_memory_maximum=self.search_memory_budget,
             num_threads=self.num_threads,
             vector_dtype=np.float32,
         )
 
         self._static_index = dap.StaticDiskIndex(
             index_directory=str(self.index_directory),
-            metric=self.metric,
             num_threads=self.num_threads,
+            num_nodes_to_cache=0,
+            distance_metric=self.metric,
+            vector_dtype=np.float32,
         )
 
     def load(self) -> None:
@@ -79,8 +82,10 @@ class DiskAnnIndex:
 
         self._static_index = dap.StaticDiskIndex(
             index_directory=str(self.index_directory),
-            metric=self.metric,
             num_threads=self.num_threads,
+            num_nodes_to_cache=0,
+            distance_metric=self.metric,
+            vector_dtype=np.float32,
         )
 
     def search(self, query: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
