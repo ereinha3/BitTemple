@@ -1,3 +1,12 @@
 **/__pycache__
 **/.env
 **/.DS_Store
+*__pycache__/
+*.pyc
+.env
+.env.*
+.vscode/
+.idea/
+.venv*/
+
+CHANGES.md

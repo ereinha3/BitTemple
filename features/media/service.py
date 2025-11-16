@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -10,9 +11,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from db.models import MediaCore, Movie, PersonalMedia
+from db.models import MediaCore, Movie, PersonalMedia, TvEpisode, TvSeries
+from domain.schemas.enrichment import EnrichedMetadata, MovieMetadata, TvShowMetadata
 from domain.schemas.media import MediaDetail, MediaListResponse, MediaSummary
 from domain.schemas.ingest import MediaTypeLiteral
+
+logger = logging.getLogger(__name__)
 
 
 class MediaService:
@@ -27,6 +31,7 @@ class MediaService:
             .where(MediaCore.media_id == media_id)
             .options(
                 selectinload(MediaCore.movie),
+                selectinload(MediaCore.tv_episode).selectinload(TvEpisode.series),
                 selectinload(MediaCore.personal_media),
                 selectinload(MediaCore.file_path),
             )
@@ -41,6 +46,7 @@ class MediaService:
     ) -> MediaDetail:
         media = await self.get_media(session, media_id)
         metadata = self._extract_metadata(media)
+        enriched_metadata = self._extract_enriched_metadata(media)
         title = self._resolve_title(media)
         return MediaDetail(
             media_id=media.media_id,
@@ -50,6 +56,7 @@ class MediaService:
             vector_hash=media.vector_hash,
             file_hash=media.file_hash,
             metadata=metadata,
+            enriched_metadata=enriched_metadata,
         )
 
     async def list_media(
@@ -61,6 +68,7 @@ class MediaService:
     ) -> MediaListResponse:
         stmt = select(MediaCore).options(
             selectinload(MediaCore.movie),
+            selectinload(MediaCore.tv_episode).selectinload(TvEpisode.series),
             selectinload(MediaCore.personal_media),
             selectinload(MediaCore.file_path),
         ).order_by(MediaCore.created_at.desc())
@@ -97,6 +105,7 @@ class MediaService:
         )
 
     def _extract_metadata(self, media: MediaCore) -> Optional[Dict[str, Any]]:
+        """Extract raw metadata from database (legacy field)."""
         if media.movie and media.movie.metadata_enriched:
             try:
                 return json.loads(media.movie.metadata_enriched)
@@ -104,9 +113,45 @@ class MediaService:
                 return None
         return None
 
+    def _extract_enriched_metadata(self, media: MediaCore) -> Optional[EnrichedMetadata]:
+        """Extract and parse type-safe enriched metadata.
+        
+        Parses the metadata_enriched JSON field and validates it against
+        the appropriate Pydantic schema based on media type.
+        """
+        try:
+            if media.type == "movie" and media.movie:
+                if media.movie.metadata_enriched:
+                    # Parse JSON and validate as MovieMetadata
+                    movie_data = json.loads(media.movie.metadata_enriched)
+                    movie_metadata = MovieMetadata(**movie_data)
+                    return EnrichedMetadata(movie=movie_metadata)
+            
+            elif media.type == "tv" and media.tv_episode:
+                # For TV episodes, get the series metadata
+                if media.tv_episode.series and media.tv_episode.series.metadata_enriched:
+                    # Parse JSON and validate as TvShowMetadata
+                    tv_data = json.loads(media.tv_episode.series.metadata_enriched)
+                    tv_metadata = TvShowMetadata(**tv_data)
+                    return EnrichedMetadata(tv_show=tv_metadata)
+            
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse metadata_enriched JSON for {media.media_id}: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to validate enriched metadata for {media.media_id}: {e}")
+        
+        return None
+
     def _resolve_title(self, media: MediaCore) -> str:
         if media.movie and media.movie.title:
             return media.movie.title
+        if media.tv_episode:
+            # Format as "Show Name - S01E01 - Episode Name"
+            series_name = media.tv_episode.series.name if media.tv_episode.series else "Unknown Show"
+            season = f"S{media.tv_episode.season_number:02d}"
+            episode = f"E{media.tv_episode.episode_number:02d}"
+            episode_name = media.tv_episode.name or "Episode"
+            return f"{series_name} - {season}{episode} - {episode_name}"
         if media.personal_media and media.file_path:
             return Path(media.file_path.abs_path).name
         return media.media_id
