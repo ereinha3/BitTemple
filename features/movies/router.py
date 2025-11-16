@@ -43,7 +43,7 @@ async def search_catalog_movies(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.get("/search/local", response_model=LocalMovieSearchResponse)
+@router.get("/local/search", response_model=LocalMovieSearchResponse)
 async def search_local_movies(
     query: str = Query(..., min_length=1, description="Search term for local library"),
     limit: int = Query(10, ge=1, le=50),
