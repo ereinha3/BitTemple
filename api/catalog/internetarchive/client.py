@@ -181,25 +181,25 @@ class InternetArchiveClient:
         plan = self.plan_movie_download(identifier, include_subtitles=opts.include_subtitles)
 
         destination = destination or Path("/home/ethan/tmp")
-        download_map: dict[str, str] = {}
+        download_list: list[str] = []
         for remote in (plan.video_file, plan.metadata_xml_file, plan.cover_art_file):
             if remote:
-                download_map[remote] = remote
-        for remote in plan.subtitle_files:
-            download_map[remote] = remote
+                download_list.append(remote)
+        download_list.extend(plan.subtitle_files)
 
         destination.mkdir(parents=True, exist_ok=True)
         target_dir = destination / identifier
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        if download_map:
+        if download_list:
             item = self.get_item(identifier)
             try:
                 item.download(
-                    destdir=str(destination),
-                    files=download_map,
+                    destdir=str(target_dir),
+                    files=download_list,
                     ignore_existing=opts.ignore_existing,
                     checksum=opts.checksum,
+                    no_directory=True,
                 )
             except Exception as exc:  # noqa: BLE001
                 raise InternetArchiveDownloadError(
