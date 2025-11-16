@@ -5,13 +5,14 @@ import logging
 from datetime import datetime
 from typing import Any, Optional
 
-from api.tmdb import TMDbClient, TMDbMovie
+from api.tmdb import TMDbClient, TMDbMovie, TMDbTvShow
 from app.settings import AppSettings, get_settings
 from domain.schemas.enrichment import (
     CastMember,
     CrewMember,
     ImageMetadata,
     MovieMetadata,
+    TvShowMetadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -20,12 +21,21 @@ logger = logging.getLogger(__name__)
 class EnrichmentResult:
     """Result of metadata enrichment containing structured data ready for database."""
 
-    def __init__(self, movie: TMDbMovie, client: TMDbClient):
-        self.movie = movie
+    def __init__(
+        self,
+        client: TMDbClient,
+        movie: Optional[TMDbMovie] = None,
+        tv_show: Optional[TMDbTvShow] = None,
+    ):
         self._client = client
+        self.movie = movie
+        self.tv_show = tv_show
 
     def to_movie_metadata(self) -> MovieMetadata:
         """Convert TMDb movie to type-safe MovieMetadata Pydantic model."""
+        if not self.movie:
+            raise ValueError("EnrichmentResult does not contain movie data")
+            
         # Parse release date
         release_date = None
         year = None
@@ -198,12 +208,207 @@ class EnrichmentResult:
         }
 
     def get_poster_url(self, size: str = "w500") -> Optional[str]:
-        """Get poster URL for the movie."""
-        return self._client.get_image_url(self.movie.poster_path, size=size)
+        """Get poster URL for the movie or TV show."""
+        path = self.movie.poster_path if self.movie else (self.tv_show.poster_path if self.tv_show else None)
+        return self._client.get_image_url(path, size=size)
 
     def get_backdrop_url(self, size: str = "original") -> Optional[str]:
-        """Get backdrop URL for the movie."""
-        return self._client.get_image_url(self.movie.backdrop_path, size=size)
+        """Get backdrop URL for the movie or TV show."""
+        path = self.movie.backdrop_path if self.movie else (self.tv_show.backdrop_path if self.tv_show else None)
+        return self._client.get_image_url(path, size=size)
+
+    def to_tv_metadata(self) -> TvShowMetadata:
+        """Convert TMDb TV show to type-safe TvShowMetadata Pydantic model."""
+        if not self.tv_show:
+            raise ValueError("EnrichmentResult does not contain TV show data")
+            
+        # Parse air dates
+        first_air_date = None
+        last_air_date = None
+        if self.tv_show.first_air_date:
+            try:
+                first_air_date = datetime.fromisoformat(self.tv_show.first_air_date)
+            except (ValueError, AttributeError):
+                logger.warning(f"Invalid first air date format: {self.tv_show.first_air_date}")
+        
+        if self.tv_show.last_air_date:
+            try:
+                last_air_date = datetime.fromisoformat(self.tv_show.last_air_date)
+            except (ValueError, AttributeError):
+                logger.warning(f"Invalid last air date format: {self.tv_show.last_air_date}")
+
+        # Extract cast
+        cast = None
+        if "credits" in self.tv_show.raw_data:
+            credits = self.tv_show.raw_data["credits"]
+            cast_data = credits.get("cast", [])[:20]  # Top 20 cast members
+            if cast_data:
+                cast = [
+                    CastMember(
+                        name=member.get("name", ""),
+                        character=member.get("character", ""),
+                        order=member.get("order", 999),
+                        profile_path=member.get("profile_path"),
+                    )
+                    for member in cast_data
+                    if member.get("name")
+                ]
+
+        # Extract crew
+        crew = None
+        if "credits" in self.tv_show.raw_data:
+            credits = self.tv_show.raw_data["credits"]
+            crew_data = [
+                c for c in credits.get("crew", [])
+                if c.get("job") in ["Director", "Executive Producer", "Producer", "Writer"]
+            ]
+            if crew_data:
+                crew = [
+                    CrewMember(
+                        name=member.get("name", ""),
+                        job=member.get("job", ""),
+                        department=member.get("department", ""),
+                    )
+                    for member in crew_data
+                    if member.get("name") and member.get("job")
+                ]
+
+        # Extract images
+        posters = None
+        backdrops = None
+        if "images" in self.tv_show.raw_data:
+            images = self.tv_show.raw_data["images"]
+            poster_data = images.get("posters", [])[:10]  # Top 10 posters
+            backdrop_data = images.get("backdrops", [])[:10]  # Top 10 backdrops
+            
+            if poster_data:
+                posters = [
+                    ImageMetadata(
+                        file_path=img.get("file_path", ""),
+                        width=img.get("width"),
+                        height=img.get("height"),
+                        aspect_ratio=img.get("aspect_ratio"),
+                        vote_average=img.get("vote_average"),
+                        vote_count=img.get("vote_count"),
+                        iso_639_1=img.get("iso_639_1"),
+                    )
+                    for img in poster_data
+                    if img.get("file_path")
+                ]
+            
+            if backdrop_data:
+                backdrops = [
+                    ImageMetadata(
+                        file_path=img.get("file_path", ""),
+                        width=img.get("width"),
+                        height=img.get("height"),
+                        aspect_ratio=img.get("aspect_ratio"),
+                        vote_average=img.get("vote_average"),
+                        vote_count=img.get("vote_count"),
+                        iso_639_1=img.get("iso_639_1"),
+                    )
+                    for img in backdrop_data
+                    if img.get("file_path")
+                ]
+
+        # Extract genres, languages, countries
+        genres = None
+        if self.tv_show.genres:
+            genres = [g.name for g in self.tv_show.genres]
+
+        languages = None
+        if self.tv_show.spoken_languages:
+            languages = [lang.english_name for lang in self.tv_show.spoken_languages]
+
+        countries = None
+        if self.tv_show.origin_country:
+            countries = self.tv_show.origin_country
+
+        # Extract creators
+        created_by = None
+        if self.tv_show.created_by:
+            created_by = [creator.get("name") for creator in self.tv_show.created_by if creator.get("name")]
+
+        # Extract networks
+        networks = None
+        if self.tv_show.networks:
+            networks = [network.get("name") for network in self.tv_show.networks if network.get("name")]
+
+        # Get IMDB ID from external_ids if available
+        imdb_id = None
+        if "external_ids" in self.tv_show.raw_data:
+            imdb_id = self.tv_show.raw_data["external_ids"].get("imdb_id")
+
+        # Get full URLs for poster and backdrop
+        poster_url = self.get_poster_url() if self.tv_show.poster_path else None
+        backdrop_url = self.get_backdrop_url() if self.tv_show.backdrop_path else None
+
+        return TvShowMetadata(
+            tmdb_id=self.tv_show.id,
+            imdb_id=imdb_id,
+            name=self.tv_show.name,
+            original_name=self.tv_show.original_name,
+            tagline=self.tv_show.tagline,
+            overview=self.tv_show.overview,
+            type=self.tv_show.type,
+            status=self.tv_show.status,
+            first_air_date=first_air_date,
+            last_air_date=last_air_date,
+            number_of_seasons=self.tv_show.number_of_seasons,
+            number_of_episodes=self.tv_show.number_of_episodes,
+            genres=genres,
+            languages=languages,
+            countries=countries,
+            vote_average=self.tv_show.vote_average,
+            vote_count=self.tv_show.vote_count,
+            popularity=self.tv_show.popularity,
+            cast=cast,
+            crew=crew,
+            created_by=created_by,
+            poster_path=self.tv_show.poster_path,
+            backdrop_path=self.tv_show.backdrop_path,
+            posters=posters,
+            backdrops=backdrops,
+            poster_url=poster_url,
+            backdrop_url=backdrop_url,
+            homepage=self.tv_show.homepage,
+            networks=networks,
+        )
+
+    def to_tv_dict(self) -> dict[str, Any]:
+        """Convert TMDb TV show to database-compatible dictionary for TvSeries table.
+        
+        This method provides backward compatibility for database storage.
+        The metadata_enriched field stores the type-safe TvShowMetadata as JSON.
+        """
+        # Get type-safe metadata
+        metadata = self.to_tv_metadata()
+        
+        # Convert to database format
+        return {
+            "tmdb_id": metadata.tmdb_id,
+            "imdb_id": metadata.imdb_id,
+            "name": metadata.name,
+            "original_name": metadata.original_name,
+            "first_air_date": metadata.first_air_date,
+            "last_air_date": metadata.last_air_date,
+            "genres": "|".join(metadata.genres) if metadata.genres else None,
+            "overview": metadata.overview,
+            "cast_json": json.dumps(
+                [member.dict() for member in metadata.cast], ensure_ascii=False
+            ) if metadata.cast else None,
+            "crew_json": json.dumps(
+                [member.dict() for member in metadata.crew], ensure_ascii=False
+            ) if metadata.crew else None,
+            "posters_json": json.dumps(
+                [img.dict() for img in metadata.posters], ensure_ascii=False
+            ) if metadata.posters else None,
+            "backdrops_json": json.dumps(
+                [img.dict() for img in metadata.backdrops], ensure_ascii=False
+            ) if metadata.backdrops else None,
+            "metadata_raw": json.dumps(self.tv_show.raw_data, ensure_ascii=False),
+            "metadata_enriched": metadata.model_dump_json(),  # Store type-safe metadata as JSON
+        }
 
 
 class MetadataEnrichmentService:
@@ -283,7 +488,7 @@ class MetadataEnrichmentService:
                 f"(TMDb ID: {movie.id}, IMDb ID: {movie.imdb_id})"
             )
 
-            return EnrichmentResult(movie, client)
+            return EnrichmentResult(client=client, movie=movie)
 
         except Exception as e:
             logger.error(f"Error enriching movie metadata for '{title}': {e}")
@@ -293,19 +498,66 @@ class MetadataEnrichmentService:
         self,
         title: str,
         year: Optional[int] = None,
-    ) -> Optional[dict[str, Any]]:
-        """Enrich TV show metadata (placeholder for future implementation).
+        include_credits: bool = True,
+        include_images: bool = True,
+    ) -> Optional[EnrichmentResult]:
+        """Enrich TV show metadata by searching TMDb and fetching details.
         
         Args:
-            title: TV show title to search for
-            year: Optional first air year
+            title: TV show name to search for
+            year: Optional first air year to improve search accuracy
+            include_credits: Include cast and crew information
+            include_images: Include posters and backdrops
             
         Returns:
-            Dictionary with TV show metadata, or None if not found
+            EnrichmentResult with structured metadata, or None if not found
         """
-        # TODO: Implement TV show enrichment when TMDb TV endpoints are added
-        logger.warning("TV show enrichment not yet implemented")
-        return None
+        client = self._get_tmdb_client()
+
+        try:
+            # Search for the TV show
+            logger.info(f"Searching TMDb for TV show: {title}" + (f" ({year})" if year else ""))
+            results = await client.search_tv(
+                query=title,
+                first_air_date_year=year,
+                language=self.settings.tmdb.language,
+                include_adult=self.settings.tmdb.include_adult,
+            )
+
+            if not results:
+                logger.warning(f"No TMDb results found for TV show: {title}")
+                return None
+
+            # Get details for the best match
+            tv_id = results[0].id
+            logger.info(f"Found TMDb match: {results[0].name} (ID: {tv_id})")
+
+            # Build append_to_response list
+            append = []
+            if include_credits:
+                append.append("credits")
+            if include_images:
+                append.append("images")
+            # Always include external_ids for IMDB ID
+            append.append("external_ids")
+
+            tv_show = await client.get_tv_details(
+                tv_id=tv_id,
+                language=self.settings.tmdb.language,
+                append_to_response=append if append else None,
+            )
+
+            logger.info(
+                f"Successfully enriched TV show: {tv_show.name} "
+                f"(TMDb ID: {tv_show.id}, Seasons: {tv_show.number_of_seasons}, "
+                f"Episodes: {tv_show.number_of_episodes})"
+            )
+
+            return EnrichmentResult(client=client, tv_show=tv_show)
+
+        except Exception as e:
+            logger.error(f"Error enriching TV show metadata for '{title}': {e}")
+            return None
 
     async def close(self) -> None:
         """Close any open connections."""

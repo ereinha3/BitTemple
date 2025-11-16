@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.ann import get_ann_service
-from db.models import FilePath, MediaCore, Movie, PersonalMedia
+from db.models import FilePath, MediaCore, Movie, PersonalMedia, TvSeries, TvEpisode
 from domain.schemas import IngestRequest, IngestResponse
 from infrastructure.embedding import get_embedding_service
 from features.ingest.metadata import (
@@ -195,10 +195,46 @@ class IngestService:
             session.add(movie)
             
         elif media_type == "tv":
-            # TODO: Implement TV show enrichment
-            logger.info("TV show enrichment not yet implemented, using basic metadata")
-            # For now, create basic record (you'll need to handle TvEpisode differently)
-            pass
+            # TV episodes require series info and season/episode numbers
+            show_name = metadata.get("show_name") or metadata.get("series_name") or text_blob.title()
+            season_number = metadata.get("season_number") or metadata.get("season", 1)
+            episode_number = metadata.get("episode_number") or metadata.get("episode", 1)
+            
+            # Try to enrich with TMDb metadata
+            enriched_data = await self._enrich_tv_metadata(metadata, show_name)
+            
+            if enriched_data:
+                # Get or create series record with enriched data
+                series_id = enriched_data.get("series_id")
+                series = await self._get_or_create_tv_series(
+                    session=session,
+                    series_data=enriched_data,
+                    meta_fingerprint=meta_fingerprint,
+                )
+            else:
+                # Fallback to basic series metadata
+                logger.warning(f"TMDb enrichment failed for TV show: {show_name}, using basic metadata")
+                series = await self._get_or_create_tv_series_basic(
+                    session=session,
+                    show_name=show_name,
+                    meta_fingerprint=meta_fingerprint,
+                )
+            
+            # Create episode record
+            episode = TvEpisode(
+                media_id=media_id,
+                series_id=series.series_id,
+                season_number=season_number,
+                episode_number=episode_number,
+                name=metadata.get("episode_name") or metadata.get("title"),
+                overview=metadata.get("overview"),
+                air_date=metadata.get("air_date"),
+                runtime_min=metadata.get("runtime_min"),
+                meta_fingerprint=meta_fingerprint,
+                metadata_raw=metadata_raw,
+                metadata_enriched=metadata_raw,  # TODO: Implement per-episode enrichment
+            )
+            session.add(episode)
             
         elif media_type == "personal":
             persons = metadata.get("persons")
@@ -253,6 +289,112 @@ class IngestService:
             logger.error(f"Error during TMDb enrichment for '{title}': {e}")
         
         return None
+
+    async def _enrich_tv_metadata(
+        self, 
+        metadata: Mapping[str, Any], 
+        show_name: str
+    ) -> dict[str, Any] | None:
+        """Attempt to enrich TV show metadata using TMDb API.
+        
+        Args:
+            metadata: Original metadata from ingest request
+            show_name: TV show name
+            
+        Returns:
+            Dictionary with enriched metadata including series_id, or None if enrichment fails
+        """
+        # Extract year from metadata if available
+        year = metadata.get("year") or metadata.get("first_air_year")
+        
+        if not show_name:
+            logger.warning("No show name available for TMDb enrichment")
+            return None
+        
+        try:
+            # Attempt to enrich with TMDb
+            enrichment_result = await self.enrichment_service.enrich_tv_show(
+                title=show_name,
+                year=year,
+                include_credits=True,
+                include_images=True,
+            )
+            
+            if enrichment_result:
+                tv_dict = enrichment_result.to_tv_dict()
+                # Generate series_id from TMDb ID
+                tv_dict["series_id"] = f"tmdb-{tv_dict['tmdb_id']}"
+                return tv_dict
+            
+        except Exception as e:
+            logger.error(f"Error during TMDb enrichment for TV show '{show_name}': {e}")
+        
+        return None
+
+    async def _get_or_create_tv_series(
+        self,
+        session: AsyncSession,
+        series_data: dict[str, Any],
+        meta_fingerprint: str,
+    ) -> TvSeries:
+        """Get existing or create new TvSeries record with enriched data."""
+        series_id = series_data.get("series_id")
+        
+        # Check if series already exists
+        stmt = select(TvSeries).where(TvSeries.series_id == series_id)
+        existing = await session.scalar(stmt)
+        if existing:
+            return existing
+        
+        # Create new series record
+        series = TvSeries(
+            series_id=series_id,
+            tmdb_id=series_data.get("tmdb_id"),
+            imdb_id=series_data.get("imdb_id"),
+            name=series_data.get("name"),
+            original_name=series_data.get("original_name"),
+            first_air_date=series_data.get("first_air_date"),
+            last_air_date=series_data.get("last_air_date"),
+            genres=series_data.get("genres"),
+            overview=series_data.get("overview"),
+            cast_json=series_data.get("cast_json"),
+            crew_json=series_data.get("crew_json"),
+            posters_json=series_data.get("posters_json"),
+            backdrops_json=series_data.get("backdrops_json"),
+            meta_fingerprint=meta_fingerprint,
+            metadata_raw=series_data.get("metadata_raw"),
+            metadata_enriched=series_data.get("metadata_enriched"),
+        )
+        session.add(series)
+        await session.flush()
+        return series
+
+    async def _get_or_create_tv_series_basic(
+        self,
+        session: AsyncSession,
+        show_name: str,
+        meta_fingerprint: str,
+    ) -> TvSeries:
+        """Get existing or create new TvSeries record with basic data."""
+        # Use show name as series ID for basic records
+        from utils.hashing import blake3_string
+        series_id = f"basic-{blake3_string(show_name)[:16]}"
+        
+        # Check if series already exists
+        stmt = select(TvSeries).where(TvSeries.series_id == series_id)
+        existing = await session.scalar(stmt)
+        if existing:
+            return existing
+        
+        # Create new basic series record
+        series = TvSeries(
+            series_id=series_id,
+            name=show_name,
+            meta_fingerprint=meta_fingerprint,
+        )
+        session.add(series)
+        await session.flush()
+        return series
 
     def _pipe_join(self, value: Any) -> str | None:
         if value is None:

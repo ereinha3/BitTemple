@@ -11,8 +11,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from db.models import MediaCore, Movie, PersonalMedia
-from domain.schemas.enrichment import EnrichedMetadata, MovieMetadata
+from db.models import MediaCore, Movie, PersonalMedia, TvEpisode, TvSeries
+from domain.schemas.enrichment import EnrichedMetadata, MovieMetadata, TvShowMetadata
 from domain.schemas.media import MediaDetail, MediaListResponse, MediaSummary
 from domain.schemas.ingest import MediaTypeLiteral
 
@@ -31,6 +31,7 @@ class MediaService:
             .where(MediaCore.media_id == media_id)
             .options(
                 selectinload(MediaCore.movie),
+                selectinload(MediaCore.tv_episode).selectinload(TvEpisode.series),
                 selectinload(MediaCore.personal_media),
                 selectinload(MediaCore.file_path),
             )
@@ -67,6 +68,7 @@ class MediaService:
     ) -> MediaListResponse:
         stmt = select(MediaCore).options(
             selectinload(MediaCore.movie),
+            selectinload(MediaCore.tv_episode).selectinload(TvEpisode.series),
             selectinload(MediaCore.personal_media),
             selectinload(MediaCore.file_path),
         ).order_by(MediaCore.created_at.desc())
@@ -125,9 +127,13 @@ class MediaService:
                     movie_metadata = MovieMetadata(**movie_data)
                     return EnrichedMetadata(movie=movie_metadata)
             
-            # Add other media types here when their enrichment is implemented
-            # elif media.type == "tv" and media.tv_episode:
-            #     ...
+            elif media.type == "tv" and media.tv_episode:
+                # For TV episodes, get the series metadata
+                if media.tv_episode.series and media.tv_episode.series.metadata_enriched:
+                    # Parse JSON and validate as TvShowMetadata
+                    tv_data = json.loads(media.tv_episode.series.metadata_enriched)
+                    tv_metadata = TvShowMetadata(**tv_data)
+                    return EnrichedMetadata(tv_show=tv_metadata)
             
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse metadata_enriched JSON for {media.media_id}: {e}")
@@ -139,6 +145,13 @@ class MediaService:
     def _resolve_title(self, media: MediaCore) -> str:
         if media.movie and media.movie.title:
             return media.movie.title
+        if media.tv_episode:
+            # Format as "Show Name - S01E01 - Episode Name"
+            series_name = media.tv_episode.series.name if media.tv_episode.series else "Unknown Show"
+            season = f"S{media.tv_episode.season_number:02d}"
+            episode = f"E{media.tv_episode.episode_number:02d}"
+            episode_name = media.tv_episode.name or "Episode"
+            return f"{series_name} - {season}{episode} - {episode_name}"
         if media.personal_media and media.file_path:
             return Path(media.file_path.abs_path).name
         return media.media_id

@@ -29,6 +29,25 @@ class TMDbSearchResult:
 
 
 @dataclass(slots=True, frozen=True)
+class TMDbTvSearchResult:
+    """Represents a TV show search result from TMDb."""
+
+    id: int
+    name: str
+    original_name: str
+    first_air_date: Optional[str]
+    overview: Optional[str]
+    poster_path: Optional[str]
+    backdrop_path: Optional[str]
+    popularity: float
+    vote_average: float
+    vote_count: int
+    origin_country: list[str]
+    original_language: str
+    genre_ids: list[int]
+
+
+@dataclass(slots=True, frozen=True)
 class TMDbGenre:
     """Represents a movie genre."""
 
@@ -90,6 +109,38 @@ class TMDbMovie:
     production_companies: list[TMDbProductionCompany]
     production_countries: list[TMDbProductionCountry]
     spoken_languages: list[TMDbSpokenLanguage]
+    raw_data: dict[str, Any]  # Store the complete raw response
+
+
+@dataclass(slots=True, frozen=True)
+class TMDbTvShow:
+    """Represents detailed TV show information from TMDb."""
+
+    id: int
+    name: str
+    original_name: str
+    tagline: Optional[str]
+    overview: Optional[str]
+    first_air_date: Optional[str]
+    last_air_date: Optional[str]
+    status: str
+    type: str  # Scripted, Reality, etc.
+    number_of_seasons: int
+    number_of_episodes: int
+    homepage: Optional[str]
+    poster_path: Optional[str]
+    backdrop_path: Optional[str]
+    popularity: float
+    vote_average: float
+    vote_count: int
+    original_language: str
+    origin_country: list[str]
+    genres: list[TMDbGenre]
+    production_companies: list[TMDbProductionCompany]
+    production_countries: list[TMDbProductionCountry]
+    spoken_languages: list[TMDbSpokenLanguage]
+    networks: list[dict[str, Any]]  # Network information
+    created_by: list[dict[str, Any]]  # Creator information
     raw_data: dict[str, Any]  # Store the complete raw response
 
 
@@ -309,6 +360,147 @@ class TMDbClient:
             production_companies=companies,
             production_countries=countries,
             spoken_languages=languages,
+            raw_data=data,  # Store complete response for additional fields
+        )
+
+    async def search_tv(
+        self,
+        query: str,
+        *,
+        first_air_date_year: Optional[int] = None,
+        page: int = 1,
+        include_adult: bool = False,
+        language: str = "en-US",
+    ) -> list[TMDbTvSearchResult]:
+        """Search for TV shows by name.
+        
+        Args:
+            query: TV show name to search for
+            first_air_date_year: Filter by first air date year
+            page: Page number (1-based)
+            include_adult: Include adult content in results
+            language: Language for results (ISO 639-1 code with optional country)
+            
+        Returns:
+            List of TV show search results
+        """
+        params: dict[str, Any] = {
+            "query": query,
+            "page": page,
+            "include_adult": include_adult,
+            "language": language,
+        }
+        if first_air_date_year is not None:
+            params["first_air_date_year"] = first_air_date_year
+
+        data = await self._request("GET", "search/tv", params)
+        results = []
+        
+        for item in data.get("results", []):
+            results.append(
+                TMDbTvSearchResult(
+                    id=item["id"],
+                    name=item.get("name", ""),
+                    original_name=item.get("original_name", ""),
+                    first_air_date=item.get("first_air_date"),
+                    overview=item.get("overview"),
+                    poster_path=item.get("poster_path"),
+                    backdrop_path=item.get("backdrop_path"),
+                    popularity=item.get("popularity", 0.0),
+                    vote_average=item.get("vote_average", 0.0),
+                    vote_count=item.get("vote_count", 0),
+                    origin_country=item.get("origin_country", []),
+                    original_language=item.get("original_language", ""),
+                    genre_ids=item.get("genre_ids", []),
+                )
+            )
+        
+        return results
+
+    async def get_tv_details(
+        self,
+        tv_id: int,
+        *,
+        language: str = "en-US",
+        append_to_response: Optional[list[str]] = None,
+    ) -> TMDbTvShow:
+        """Get detailed information about a specific TV show.
+        
+        Args:
+            tv_id: TMDb TV show ID
+            language: Language for results
+            append_to_response: Additional data to append (e.g., ['credits', 'images', 'external_ids'])
+            
+        Returns:
+            Detailed TV show information
+        """
+        params: dict[str, Any] = {"language": language}
+        if append_to_response:
+            params["append_to_response"] = ",".join(append_to_response)
+
+        data = await self._request("GET", f"tv/{tv_id}", params)
+
+        # Parse genres
+        genres = [
+            TMDbGenre(id=g["id"], name=g["name"]) for g in data.get("genres", [])
+        ]
+
+        # Parse production companies
+        companies = [
+            TMDbProductionCompany(
+                id=c["id"],
+                name=c["name"],
+                logo_path=c.get("logo_path"),
+                origin_country=c.get("origin_country", ""),
+            )
+            for c in data.get("production_companies", [])
+        ]
+
+        # Parse production countries
+        countries = [
+            TMDbProductionCountry(
+                iso_3166_1=c["iso_3166_1"],
+                name=c["name"],
+            )
+            for c in data.get("production_countries", [])
+        ]
+
+        # Parse spoken languages
+        languages = [
+            TMDbSpokenLanguage(
+                iso_639_1=lang["iso_639_1"],
+                name=lang["name"],
+                english_name=lang.get("english_name", lang["name"]),
+            )
+            for lang in data.get("spoken_languages", [])
+        ]
+
+        return TMDbTvShow(
+            id=data["id"],
+            name=data.get("name", ""),
+            original_name=data.get("original_name", ""),
+            tagline=data.get("tagline"),
+            overview=data.get("overview"),
+            first_air_date=data.get("first_air_date"),
+            last_air_date=data.get("last_air_date"),
+            status=data.get("status", ""),
+            type=data.get("type", ""),
+            number_of_seasons=data.get("number_of_seasons", 0),
+            number_of_episodes=data.get("number_of_episodes", 0),
+            homepage=data.get("homepage"),
+            poster_path=data.get("poster_path"),
+            backdrop_path=data.get("backdrop_path"),
+            popularity=data.get("popularity", 0.0),
+            vote_average=data.get("vote_average", 0.0),
+            vote_count=data.get("vote_count", 0),
+            original_language=data.get("original_language", ""),
+            origin_country=data.get("origin_country", []),
+            genres=genres,
+            production_companies=companies,
+            production_countries=countries,
+            spoken_languages=languages,
+            networks=data.get("networks", []),
+            created_by=data.get("created_by", []),
             raw_data=data,  # Store complete response for additional fields
         )
 

@@ -16,6 +16,11 @@ def blake3_file(path: Path, chunk_size: int = 1 << 20) -> str:
     return hasher.hexdigest()
 
 
+def blake3_string(text: str) -> str:
+    """Hash a string using BLAKE3."""
+    return blake3(text.encode("utf-8")).hexdigest()
+
+
 def canonicalize_vector(
     vector: np.ndarray,
     round_eps: float = 1e-6,
