@@ -3,23 +3,26 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
 
-from .base import BaseMedia
+from .base import BaseMedia, ImageMetadata
 
-class PodcastEpisodeMedia(BaseMedia):
-    """Podcast episode metadata from enrichment (placeholder for future)."""
-    
-    # IDs
-    guid: Optional[str] = Field(None, description="Episode GUID")
+class PodcastShowMedia(BaseMedia):
+    """Podcast show metadata from enrichment (placeholder for future)."""
     
     # Basic Info
-    title: str = Field(..., description="Episode title")
-    show_name: Optional[str] = Field(None, description="Podcast show name")
-    description: Optional[str] = Field(None, description="Episode description")
+    podcast_title: str = Field(..., description="Show title")
+    publisher: Optional[str] = Field(None, description="Publisher name")
+    description: Optional[str] = Field(None, description="Show description")
+    
+    poster: Optional[ImageMetadata] = Field(None, description="Primary poster image path")
+
+
+class PodcastEpisodeMedia(PodcastShowMedia):
+    """Podcast episode metadata from enrichment (placeholder for future)."""
+    
+    # Basic Info
+    episode_title: str = Field(..., description="Episode title")
     
     # Episode Info
     pub_date: Optional[datetime] = Field(None, description="Publication date")
     duration_s: Optional[int] = Field(None, description="Duration in seconds")
-    
-    # Images
-    image_url: Optional[str] = Field(None, description="Episode artwork URL")
-
+    episode_description: Optional[str] = Field(None, description="Episode description")

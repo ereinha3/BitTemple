@@ -34,11 +34,6 @@ class MovieMedia(BaseMedia):
     # People
     cast: Optional[list[str]] = Field(None, description="Top cast members")
     
-    # Images
-    poster: Optional[ImageMedia] = Field(None, description="Primary poster image path")
-    backdrop: Optional[ImageMedia] = Field(None, description="Primary backdrop image path")
-    
-    
     # Flags
     rating: Optional[str] = Field(None, description="Adult content flag")
     

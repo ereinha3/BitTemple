@@ -14,7 +14,6 @@ class MusicArtistMedia(BaseMedia):
     )
     
 
-
 class MusicAlbumMedia(BaseMedia):
     """Music track metadata from enrichment (placeholder for future)."""
     
