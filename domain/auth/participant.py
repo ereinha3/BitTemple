@@ -10,6 +10,7 @@ class ParticipantBase(BaseModel):
     display_name: Optional[str] = Field(default=None, max_length=255)
     email: Optional[EmailStr] = None
     preferences_json: Optional[str] = None
+    role: Optional[str] = None
 
 
 class ParticipantCreate(ParticipantBase):

@@ -112,6 +112,7 @@ class AdminParticipantLink(Base):
         ForeignKey("participants.participant_id", ondelete="CASCADE"),
         primary_key=True
     )
+    role: Mapped[str] = mapped_column(String(50), default="viewer", nullable=False)
     
     # When the association was created
     linked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.session import get_session
-from domain.schemas import (
+from domain.auth.participant import (
     ParticipantAssignmentRequest,
     ParticipantCreate,
     ParticipantRead,

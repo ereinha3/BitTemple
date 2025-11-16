@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.session import get_session
-from domain.auth import AdminRead, AuthMeResponse, AuthSetupRequest, LoginRequest, TokenResponse
+from domain.auth.auth import (
+    AdminRead,
+    AuthMeResponse,
+    AuthSetupRequest,
+    LoginRequest,
+    TokenResponse,
+)
 from features.auth.dependencies import (
     get_auth_service,
     get_current_admin,

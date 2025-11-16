@@ -13,8 +13,8 @@ from db.models import (
     AdminParticipantLink,
     Participant,
 )
-from domain.schemas.auth import AdminRead, AuthSetupRequest, LoginRequest, TokenResponse
-from domain.schemas.participant import (
+from domain.auth.auth import AdminRead, AuthSetupRequest, LoginRequest, TokenResponse
+from domain.auth.participant import (
     ParticipantAssignmentRequest,
     ParticipantCreate,
     ParticipantRead,
@@ -45,7 +45,7 @@ class AuthService:
         admin = Admin(
             admin_id=str(uuid4()),
             email=payload.email.lower(),
-            password_hash=hash_password(payload.password),
+            hashed_password=hash_password(payload.password),
             display_name=payload.display_name,
         )
         session.add(admin)
@@ -71,7 +71,7 @@ class AuthService:
     async def authenticate(self, session: AsyncSession, payload: LoginRequest) -> TokenResponse:
         stmt = select(Admin).where(func.lower(Admin.email) == payload.email.lower())
         admin = await session.scalar(stmt)
-        if not admin or not verify_password(payload.password, admin.password_hash):
+        if not admin or not verify_password(payload.password, admin.hashed_password):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid credentials.",
@@ -108,6 +108,7 @@ class AuthService:
                 display_name=payload.display_name,
                 email=payload.email,
                 preferences_json=payload.preferences_json,
+                role=payload.role or default_role,
             )
             session.add(participant)
             link = AdminParticipantLink(
