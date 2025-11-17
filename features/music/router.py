@@ -269,7 +269,7 @@ def _build_embedding_corpus(media: MusicTrackMedia) -> str:
     if media.album:
         parts.append(media.album)
     if media.genres:
-        parts.extend(media.genres)
-    if media.license:
-        parts.append(media.license)
+        for genre in media.genres:
+            if genre:
+                parts.append(str(genre))
     return " ".join(filter(None, parts)) or media.title or "unknown track"

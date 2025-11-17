@@ -1,4 +1,3 @@
-```
         
                                                                                                      .---.                     
 /|        .--.                                  __.....__      __  __   ___  _________   _...._      |   |      __.....__      
@@ -23,7 +22,7 @@
                                       ▍▌▌▊▌▌▋▂▍▌▃▇▇█████████▇▂▍▏                                    
                                    ▎▌▎▌▋▌▌▉▁▌▍▌▌▉▂▇████████████▆▊▏                                  
                                ▎▎▌▊▌▍▊▋▍▍▊▊▍▌▌▊▉▅▂▅██████████████▅▉▉▊                               
-                              ▍▌▉▂▍▊▌▍▎▌▉▍▍▍▍▌▉▄▊█▅██████████████████▅▏                             
+                              ▍▌▉▂▍▊▌▍▎▌▉▍▍▍▌▉▄▊█▅██████████████████▅▏                             
                               ▋▃▂▍▉▉▍▌▉▉▌▍▋▌▌▁▉▄▄▆▅▅███▇██████████████▋                             
                             ▏▎▎▃▍▌▁▍▍▍▃▍▍▍▍▌▉▄▆██████████████████████▃▎▎                            
                             ▎▌▍▍▍▍▍▍▍▍▋▊▃▅▉▅▅▅▅▅▅▅▅▅▅▅▅▇▇▆█████████████▅                            
@@ -37,7 +36,7 @@
                          ▊▊▂██▇▍█▋▁█▁▋▊▃██▁██▂██▇▄▊▆▅▇▃█▁▇██▂████████████▅▏                         
                         ▎▆████▇▍█▋▁▊▉▌▊▂██▁██▂███▇▂▇█▇▃█▁███▃█████████████                          
                          ▏▉▅▄█▃▍▁▁▏  ▌▌▄█▅▃▇█▃███████▇▃█▂▆█▇▃███████████▉▎                          
-                          ▎▎▉▁▋▍▌▉▋▋▋▉▋▁▄▄▄▅▆▄▅▆▆▆▅▆▆▅▅▆▄▆▆▆▇███████████▇▊                          
+                          ▎▎▉▁▋▍▌▉▋▋▋▉▋▁▄▄▄▅▆▄▅▆▆▆▅▆▆▅▆▄▆▆▆▇███████████▇▊                          
                          ▍▎▋▆▅▅▅▅▅▆▆▇▆▇███████████████████████████████████▄▏                        
                         ▎▋▌██▄▌▌▋▌▌▌▌▌▌▊▋▊▃▅▆▇▆████████████████████████████▃▏                       
                         ▊▍▃███▉▂██████▉██▆▃████▅▆▇██████▄███▆███████████████▋                       
@@ -65,14 +64,41 @@
                                                                                                     
 ```
 
-God chose me. Not you, not anyone else, me. I was given visions. Direct clarity, showing me how to build this system. That kind of insight only appears through divine intervention.
+## BitHarbor
 
-Because in those moments, I did feel different. I felt like something was speaking directly to me. Showing me the underlying structure of the universe, how God decided software works. I am not like you.
+BitHarbor is a FastAPI-based media server focused on content-addressed storage, deterministic embeddings, and ANN-backed search across movies and music.
 
-In 2008, the CIA tried to push me in front of a moving train.
+### Highlights
+- BLAKE3 hashes identify all stored media and vectors
+- Sentence-BERT provides reproducible text embeddings per media type
+- DiskANN-ready vector index (currently falls back to exact cosine search)
+- SQLite via SQLAlchemy for a lightweight catalog
 
-This project arrived in a vision. The architecture came fully packaged as an XML file. God decided I will use sqlalchemy.
+### Quick Start
+1. **Install dependencies**
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
-It feels divine. It feels right.
+2. **Configure environment**
+   - Copy `config.example.yaml` to `config.yaml` and adjust paths
+   - Create a `.env` with `TMDB_API_KEY`, `TMDB_ACCESS_TOKEN`, optional Jamendo credentials, and storage locations (`RAID_PATH`, `VECTOR_DB_PATH`)
 
-I built it because I was able to, you are reading this because you were not.
+3. **Initialize the database**
+   ```bash
+   python -m db.init
+   ```
+
+4. **Run the API**
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+
+5. **Test ingestion (optional)**
+   - Use `/api/v1/movies/catalog/search` to match TMDb + Internet Archive results
+   - Download and ingest via `/api/v1/movies/catalog/download`
+   - Verify local search at `/api/v1/movies/local/search`
+
+See `TODO.md` for the current roadmap and open tasks.
