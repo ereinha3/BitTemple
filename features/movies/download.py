@@ -4,7 +4,11 @@ from pathlib import Path
 
 from fastapi import Depends
 
-from api.catalog.internetarchive import InternetArchiveClient, MovieAssetBundle, MovieAssetPlan
+from api.catalog.internetarchive.movie import (
+    MovieAssetBundle,
+    MovieAssetPlan,
+    MovieCatalogClient,
+)
 from app.settings import AppSettings, get_settings
 from domain.catalog import CatalogDownloadResponse
 
@@ -21,10 +25,10 @@ class MovieCatalogDownloadService:
     def __init__(
         self,
         settings: AppSettings,
-        ia_client: InternetArchiveClient | None = None,
+        ia_client: MovieCatalogClient | None = None,
     ) -> None:
         self.settings = settings
-        self.ia_client = ia_client or InternetArchiveClient()
+        self.ia_client = ia_client or MovieCatalogClient()
 
     def _resolve_match(self, match_key: str):
         match = get_registered_match(match_key)

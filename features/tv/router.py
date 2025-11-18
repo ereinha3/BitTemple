@@ -1,82 +1,111 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import FileResponse
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.session import get_session
-from domain.schemas import (
-    IngestRequest,
-    IngestResponse,
-    MediaDetail,
-    MediaListResponse,
-    SearchRequest,
-    SearchResponse,
+from domain.catalog import CatalogDownloadRequest, CatalogDownloadResponse
+
+from .download import (
+    CatalogMatchNotFoundError,
+    TvCatalogDownloadService,
+    get_tv_catalog_download_service,
 )
-from features.auth.dependencies import get_current_admin
-from features.ingest.service import IngestService, get_ingest_service
-from features.media.service import MediaService, get_media_service
-from features.search.service import SearchService, get_search_service
+from .ingest import ingest_catalog_tv
+from .local_search import (
+    LocalTvSearchResponse,
+    TvLocalSearchService,
+    get_tv_local_search_service,
+)
+from .search import (
+    TvCatalogMatchResponse,
+    TvCatalogSearchService,
+    get_registered_match,
+    get_tv_catalog_search_service,
+)
 
 router = APIRouter(prefix="/tv", tags=["tv"])
 
 
-@router.post("/search", response_model=SearchResponse)
-async def search_tv(
-    payload: SearchRequest,
+@router.get("/catalog/search", response_model=TvCatalogMatchResponse)
+async def search_catalog_tv(
+    query: str = Query(..., min_length=1, description="Series title to search in catalog sources"),
+    limit: int = Query(10, ge=1, le=50),
+    year: int | None = Query(None, description="Restrict matches to a specific first-air year"),
+    search_service: TvCatalogSearchService = Depends(get_tv_catalog_search_service),
+) -> TvCatalogMatchResponse:
+    try:
+        return await search_service.search(query=query, limit=limit, year=year)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/search/local", response_model=LocalTvSearchResponse)
+async def search_local_tv(
+    query: str = Query(..., min_length=1, description="Search term for local TV library"),
+    limit: int = Query(10, ge=1, le=50),
+    min_score: float | None = Query(
+        0.2,
+        ge=0.0,
+        le=1.0,
+        description="Minimum cosine similarity score required for a hit (0-1).",
+    ),
     session: AsyncSession = Depends(get_session),
-    admin=Depends(get_current_admin),
-    search_service: SearchService = Depends(get_search_service),
-) -> SearchResponse:
-    """Vector search across TV library"""
-    # Force filter to only tv type
-    payload.types = ["tv"]
-    results = await search_service.search(session, payload)
-    return SearchResponse(results=results)
+    search_service: TvLocalSearchService = Depends(get_tv_local_search_service),
+) -> LocalTvSearchResponse:
+    return await search_service.search(session=session, query=query, limit=limit, min_score=min_score)
 
 
-@router.get("/media", response_model=MediaListResponse)
-async def list_tv(
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+@router.post("/catalog/download", response_model=CatalogDownloadResponse)
+async def download_catalog_tv(
+    payload: CatalogDownloadRequest,
     session: AsyncSession = Depends(get_session),
-    admin=Depends(get_current_admin),
-    media_service: MediaService = Depends(get_media_service),
-) -> MediaListResponse:
-    """List all TV episode media items"""
-    return await media_service.list_media(session, "tv", limit, offset)
+    download_service: TvCatalogDownloadService = Depends(get_tv_catalog_download_service),
+) -> CatalogDownloadResponse:
+    destination_path = Path(payload.destination).expanduser().resolve() if payload.destination else None
 
+    if not payload.execute:
+        try:
+            return download_service.plan(payload.match_key, destination=destination_path)
+        except CatalogMatchNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-@router.get("/media/{media_id}", response_model=MediaDetail)
-async def get_tv_detail(
-    media_id: str,
-    session: AsyncSession = Depends(get_session),
-    admin=Depends(get_current_admin),
-    media_service: MediaService = Depends(get_media_service),
-) -> MediaDetail:
-    """Fetch metadata details for a specific TV episode"""
-    return await media_service.get_media_detail(session, media_id)
+    try:
+        download_result = download_service.download(payload.match_key, destination=destination_path)
+    except CatalogMatchNotFoundError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    match = get_registered_match(payload.match_key)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Catalog match no longer available")
 
-@router.get("/media/{media_id}/stream")
-async def stream_tv(
-    media_id: str,
-    session: AsyncSession = Depends(get_session),
-    admin=Depends(get_current_admin),
-    media_service: MediaService = Depends(get_media_service),
-) -> FileResponse:
-    """Stream original TV episode media file"""
-    return await media_service.stream_media(session, media_id)
+    if not download_result.video_path:
+        raise HTTPException(status_code=500, detail="Download did not produce a video file")
 
+    metadata = download_service.build_metadata(match, match.best_candidate, download_result)
 
-@router.post("/ingest/start", response_model=IngestResponse)
-async def ingest_tv(
-    payload: IngestRequest,
-    session: AsyncSession = Depends(get_session),
-    admin=Depends(get_current_admin),
-    ingest_service: IngestService = Depends(get_ingest_service),
-) -> IngestResponse:
-    """Ingest a TV episode file into the library"""
-    # Force media type to tv
-    payload.media_type = "tv"
-    return await ingest_service.ingest(session, payload)
+    try:
+        ingest_result = await ingest_catalog_tv(
+            session=session,
+            video_path=Path(download_result.video_path),
+            metadata=metadata,
+        )
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    download_result.file_hash = ingest_result.file_hash
+    download_result.vector_hash = ingest_result.vector_hash
+    download_result.vector_row_id = ingest_result.vector_row_id
+    download_result.movie_id = ingest_result.episode_id
+    download_result.created = ingest_result.created
+    return download_result

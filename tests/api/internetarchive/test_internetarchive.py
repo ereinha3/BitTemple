@@ -8,11 +8,18 @@ import pytest
 pytestmark = pytest.mark.api_internetarchive
 
 import internetarchive as ia
-from api.catalog.internetarchive import (
+from api.catalog.internetarchive.client import (
     InternetArchiveClient,
     InternetArchiveDownloadError,
+)
+from api.catalog.internetarchive.movie import (
     MovieAssetBundle,
     MovieAssetPlan,
+    MovieCatalogClient,
+)
+from api.catalog.internetarchive.tv import (
+    TvAssetPlan,
+    TvCatalogClient,
 )
 
 
@@ -47,15 +54,23 @@ class DummyDownloadableItem(DummyItem):
         super().__init__(payload)
         self._download_calls = download_calls
 
-    def download(self, *, destdir: str, files: Mapping[str, str], ignore_existing: bool, checksum: bool) -> None:  # noqa: D401
-        self._download_calls.append(
-            {
-                "destdir": destdir,
-                "files": dict(files),
-                "ignore_existing": ignore_existing,
-                "checksum": checksum,
-            }
-        )
+    def download(  # noqa: D401
+        self,
+        *,
+        destdir: str,
+        files: Mapping[str, str],
+        ignore_existing: bool,
+        checksum: bool,
+        **kwargs: Any,
+    ) -> None:
+        payload = {
+            "destdir": destdir,
+            "files": dict(files),
+            "ignore_existing": ignore_existing,
+            "checksum": checksum,
+        }
+        payload.update(kwargs)
+        self._download_calls.append(payload)
 
 
 @pytest.fixture(autouse=True)
@@ -78,7 +93,7 @@ def test_search_movies_returns_results(patch_get_session: DummySession) -> None:
         "item_two": {"metadata": {"title": "Second Title", "collection": "music"}},
     }
 
-    client = InternetArchiveClient()
+    client = MovieCatalogClient()
     results = client.search_movies(
         "dogs",
         limit=5,
@@ -110,7 +125,7 @@ def test_search_movies_builds_expected_query(patch_get_session: DummySession) ->
         "fantasticplanet1973": {"metadata": {"title": "Fantastic Planet", "year": "1973"}}
     }
 
-    client = InternetArchiveClient()
+    client = MovieCatalogClient()
     results = client.search_movies("Fantastic Planet", limit=1, sorts=["downloads desc"])
 
     assert results[0].catalog_id == "fantasticplanet1973"
@@ -131,13 +146,13 @@ def test_download_movie_downloads_selected_assets(tmp_path: Path, patch_get_sess
     }
     patch_get_session.items = {identifier: metadata_payload}
 
-    client = InternetArchiveClient()
+    client = MovieCatalogClient()
     bundle = client.download_movie(identifier, destination=tmp_path)
 
     target_dir = tmp_path / identifier
     assert patch_get_session.download_calls == [
         {
-            "destdir": str(tmp_path),
+            "destdir": str(tmp_path / identifier),
             "files": {
                 "Example.mp4": "Example.mp4",
                 "Example_meta.xml": "Example_meta.xml",
@@ -146,6 +161,7 @@ def test_download_movie_downloads_selected_assets(tmp_path: Path, patch_get_sess
             },
             "ignore_existing": True,
             "checksum": False,
+            "no_directory": True,
         }
     ]
     assert bundle.video_path == target_dir / "Example.mp4"
@@ -173,7 +189,7 @@ def test_download_movie_raises_on_failure(patch_get_session: DummySession, tmp_p
 
     patch_get_session.get_item = failing_get_item  # type: ignore[assignment]
 
-    client = InternetArchiveClient()
+    client = MovieCatalogClient()
     with pytest.raises(InternetArchiveDownloadError):
         client.download_movie(identifier, destination=tmp_path)
 
@@ -203,13 +219,13 @@ def test_collect_movie_assets_selects_expected_files(tmp_path: Path, patch_get_s
     }
     patch_get_session.items = {identifier: metadata_payload}
 
-    client = InternetArchiveClient()
-    bundle: MovieAssetBundle = client.collect_movie_assets(identifier, destination=tmp_path)
+    client = MovieCatalogClient()
+    bundle = client.collect_movie_assets(identifier, destination=tmp_path)
 
     target_dir = tmp_path / identifier
     assert patch_get_session.download_calls == [
         {
-            "destdir": str(tmp_path),
+            "destdir": str(tmp_path / identifier),
             "files": {
                 "SampleFilm.mp4": "SampleFilm.mp4",
                 "SampleFilm_meta.xml": "SampleFilm_meta.xml",
@@ -218,6 +234,7 @@ def test_collect_movie_assets_selects_expected_files(tmp_path: Path, patch_get_s
             },
             "ignore_existing": True,
             "checksum": False,
+            "no_directory": True,
         }
     ]
     assert bundle.video_path == target_dir / "SampleFilm.mp4"
@@ -240,7 +257,7 @@ def test_plan_movie_download_returns_expected_structure(patch_get_session: Dummy
     }
     patch_get_session.items = {identifier: metadata_payload}
 
-    client = InternetArchiveClient()
+    client = MovieCatalogClient()
     plan = client.plan_movie_download(identifier)
 
     assert isinstance(plan, MovieAssetPlan)
@@ -250,4 +267,48 @@ def test_plan_movie_download_returns_expected_structure(patch_get_session: Dummy
     assert plan.cover_art_file == "__ia_thumb.jpg"
     assert plan.subtitle_files == ("PlanItem.srt",)
     assert plan.normalized_metadata.title == "Plan Item"
+
+
+def test_search_tv_builds_expected_query(patch_get_session: DummySession) -> None:
+    patch_get_session.hits = [{"identifier": "classic_show", "title": "Classic Show"}]
+    patch_get_session.items = {
+        "classic_show": {"metadata": {"title": "Classic Show", "subject": ["Sci-Fi"]}}
+    }
+
+    client = TvCatalogClient()
+    results = client.search_tv("Classic Show", limit=1)
+
+    assert results[0].name == "Classic Show"
+    assert (
+        patch_get_session.last_query
+        == '(title:"Classic Show") AND collection:(television OR classic_tv OR tvarchive)'
+    )
+    assert patch_get_session.last_params["rows"] == 1
+
+
+def test_plan_tv_download_returns_expected_structure(patch_get_session: DummySession) -> None:
+    identifier = "tv_plan"
+    metadata_payload = {
+        "metadata": {
+            "title": "Example Show",
+            "description": "Example description",
+            "subject": ["Drama"],
+        },
+        "files": [
+            {"name": "ExampleShow.mp4", "source": "original"},
+            {"name": "ExampleShow_meta.xml"},
+            {"name": "__ia_thumb.jpg", "format": "Item Tile"},
+        ],
+    }
+    patch_get_session.items = {identifier: metadata_payload}
+
+    client = TvCatalogClient()
+    plan: TvAssetPlan = client.plan_tv_download(identifier)
+
+    assert plan.identifier == identifier
+    assert plan.video_file == "ExampleShow.mp4"
+    assert plan.metadata_xml_file == "ExampleShow_meta.xml"
+    assert plan.cover_art_file == "__ia_thumb.jpg"
+    assert plan.subtitle_files == ()
+    assert plan.normalized_metadata.name == "Example Show"
 

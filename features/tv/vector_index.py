@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Tuple
+
+import numpy as np
+
+from app.settings import get_settings
+from infrastructure.ann.vector_store import VectorStore
+from infrastructure.embedding.sentence_bert_service import get_sentence_bert_service
+
+_settings = get_settings()
+_sentence_service = get_sentence_bert_service()
+_dim = _sentence_service.get_embedding_dimension()
+
+_base_root = Path(
+    Path(os.environ.get("VECTOR_DB_PATH", str(_settings.ann.index_directory.parent)))
+)
+_tv_root = _base_root / "tv"
+_tv_root.mkdir(parents=True, exist_ok=True)
+
+_vectors_path = _tv_root / "vectors.fp32"
+_index_directory = _tv_root / "diskann"
+_index_directory.mkdir(parents=True, exist_ok=True)
+
+_vector_store = VectorStore(_vectors_path, dim=_dim)
+
+
+def _normalize_vectors(vectors: np.ndarray) -> np.ndarray:
+    """Return a copy of ``vectors`` with rows L2-normalised."""
+
+    if vectors.size == 0:
+        return vectors
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    safe_norms = np.where(norms == 0.0, 1.0, norms)
+    return vectors / safe_norms
+
+
+def append(vector: np.ndarray) -> int:
+    vec = np.asarray(vector, dtype=np.float32)
+    return _vector_store.append(vec)
+
+
+def search(vector: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Return the top ``k`` cosine-similar rows for ``vector``."""
+
+    if k <= 0:
+        return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.float32)
+
+    stored = _vector_store.read_all()
+    if stored.size == 0:
+        return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.float32)
+
+    stored = stored.astype(np.float32, copy=False)
+    stored_normalised = _normalize_vectors(stored)
+
+    query = np.asarray(vector, dtype=np.float32)
+    if query.ndim > 1:
+        query = query.ravel()
+    query_norm = np.linalg.norm(query)
+    if query_norm == 0:
+        return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.float32)
+    query_normalised = query / query_norm
+
+    similarities = stored_normalised @ query_normalised
+    order = np.argsort(similarities)[::-1]
+    top_k = order[: min(k, similarities.shape[0])]
+    return top_k.astype(np.int64), similarities[top_k].astype(np.float32)

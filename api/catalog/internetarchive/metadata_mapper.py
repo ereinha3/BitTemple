@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Any, Iterable, Mapping, Optional
 
 from domain.media.movies import MovieMedia
+from domain.media.tv import TvEpisodeMetadata
+from domain.media.tv import TvShowMedia
 
 
 HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -126,6 +128,13 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def map_metadata_to_movie(identifier: str, payload: Mapping[str, Any]) -> MovieMedia:
     """Coerce Internet Archive item metadata into ``MovieMedia``."""
 
@@ -179,4 +188,89 @@ def map_metadata_to_movie(identifier: str, payload: Mapping[str, Any]) -> MovieM
     return movie
 
 
-__all__ = ["map_metadata_to_movie"]
+def _slugify(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = re.sub(r"[^A-Za-z0-9]+", "-", value.lower()).strip("-")
+    return text or None
+
+
+def map_metadata_to_tv(identifier: str, payload: Mapping[str, Any]) -> TvEpisodeMetadata:
+    """Coerce Internet Archive item metadata into ``TvEpisodeMetadata``."""
+
+    meta = payload.get("metadata", {}) if isinstance(payload, Mapping) else {}
+
+    raw_title = meta.get("title") or meta.get("program") or identifier
+    series_name = meta.get("program") or meta.get("series") or raw_title
+    name = raw_title
+    overview = _clean_description(meta.get("description"))
+    first_air_date = _parse_datetime(
+        meta.get("first_air_date") or meta.get("start_time") or meta.get("date") or meta.get("publicdate")
+    )
+    last_air_date = _parse_datetime(meta.get("last_air_date") or meta.get("stop_time"))
+
+    languages = _parse_languages(meta.get("language"))
+    subjects = _parse_subjects(meta.get("subject"))
+    cast = _parse_cast(meta.get("creator") or meta.get("cast") or meta.get("director"))
+
+    downloads_raw = meta.get("downloads") or payload.get("downloads")
+    favorites_raw = meta.get("num_favorites") or payload.get("num_favorites")
+    download_count = _safe_int(downloads_raw)
+    favorites_count = _safe_int(favorites_raw)
+    catalog_score = favorites_count if favorites_count is not None else download_count
+
+    status = meta.get("status")
+    media_subtype = meta.get("type")
+    vote_average = _safe_float(meta.get("vote_average"))
+    vote_count = _safe_int(meta.get("vote_count"))
+
+    runtime_text = meta.get("runtime") or meta.get("length")
+    runtime_min = _parse_runtime(runtime_text)
+
+    season_label: str | None = None
+    collections = meta.get("collection")
+    if isinstance(collections, list):
+        # Prefer a descriptive collection name if available.
+        preferred = next(
+            (col for col in collections if col not in {"tvnews", "tvarchive", "TV-CSPAN"}), None
+        )
+        season_label = preferred or (collections[0] if collections else None)
+    elif isinstance(collections, str):
+        season_label = collections
+    season_name = (season_label or "Season 1").replace("_", " ").title()
+
+    series_catalog_id = _slugify(series_name) or identifier
+    season_number = 1
+    season_catalog_id = f"{series_catalog_id}::season-{season_number}"
+    episode_number = _safe_int(meta.get("episode")) or 1
+
+    episode = TvEpisodeMetadata(
+        name=name,
+        overview=overview,
+        episode_number=episode_number,
+        season_number=season_number,
+        season_name=season_name,
+        season_catalog_id=season_catalog_id,
+        series_name=series_name,
+        series_catalog_id=series_catalog_id,
+        series_overview=overview,
+        series_status=status,
+        series_first_air_date=first_air_date,
+        series_last_air_date=last_air_date,
+        series_genres=subjects,
+        series_languages=languages,
+        series_cast=cast,
+        collections=collections if isinstance(collections, list) else [collections] if isinstance(collections, str) else None,
+        air_date=first_air_date,
+        runtime_min=runtime_min,
+        media_type="tv_episode",
+        catalog_source="internet_archive",
+        catalog_id=identifier,
+        catalog_downloads=download_count,
+        catalog_score=float(catalog_score) if catalog_score is not None else None,
+    )
+
+    return episode
+
+
+__all__ = ["map_metadata_to_movie", "map_metadata_to_tv"]

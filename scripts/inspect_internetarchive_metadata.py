@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pprint import pprint
 
-from api.catalog.internetarchive import InternetArchiveClient
+from api.catalog.internetarchive.movie import MovieCatalogClient
 from api.catalog.internetarchive.metadata_mapper import map_metadata_to_movie
 from pathlib import Path
 
@@ -21,8 +21,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    client = InternetArchiveClient()
-    metadata = client.fetch_metadata(args.identifier)
+    client = MovieCatalogClient()
+    metadata = client.client.fetch_metadata(args.identifier)
 
     print("=== Raw metadata keys ===")
     pprint(sorted(metadata.get("metadata", {}).keys()))
@@ -38,6 +38,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    from pathlib import Path
-
     main()

@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import Depends
 
 from app.settings import AppSettings, get_settings
-from api.catalog.internetarchive import InternetArchiveClient
+from api.catalog.internetarchive.movie import MovieCatalogClient
 from api.metadata.tmdb.client import TMDbClient
 from domain.catalog import CatalogMatch, CatalogMatchCandidate, CatalogMatchResponse
 from domain.media.movies import MovieMedia
@@ -32,11 +32,11 @@ class MovieCatalogSearchService:
     def __init__(
         self,
         settings: AppSettings,
-        ia_client: InternetArchiveClient | None = None,
+        ia_client: MovieCatalogClient | None = None,
         tmdb_client_factory: Callable[[], TMDbClient] | None = None,
     ) -> None:
         self.settings = settings
-        self.ia_client = ia_client or InternetArchiveClient()
+        self.ia_client = ia_client or MovieCatalogClient()
         self._tmdb_client_factory = tmdb_client_factory
 
     async def search(
