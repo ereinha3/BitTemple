@@ -65,6 +65,7 @@ if __name__ == "__main__":
                 break
             else:
                 result_obj = result.json()
+                print(result_obj.keys)
                 yield (result_obj, None)
                 cursor = result_obj.get('cursor', None)
                 if cursor is None:

@@ -42,7 +42,36 @@ FIELDS = [
 BLOCKED_SUBJECTS = [
     "pornography",
     "porn",
+    "adult",
+    "nazi",
+    "klu klux klan",
 ]
+
+GENRES = [
+    "Action",
+    "Adventure",
+    "Anime",
+    "Animation",
+    "Biography",
+    "Comedy",
+    "Crime",
+    "Documentary",
+    "Drama",
+    "Family",
+    "Fantasy",
+    "History",
+    "Horror",
+    "Music",
+    "Mystery",
+    "Romance",
+    "Sci-Fi",
+    "Science Fiction",
+    "Thriller",
+    "War",
+    "Western",
+]
+
+FORCE_GENRES = True
 
 CONFIG_FILE = Path(os.getenv("HOME", "")) / ".config" / "internetarchive" / "config"
 
@@ -54,11 +83,11 @@ class MovieSearchQuery:
     genres: Optional[list[str]] = field(default_factory=list)
     creator: Optional[str] = None
     languages: Optional[list[str]] = field(default_factory=lambda: ['en', 'eng', "English"])
-    license: Optional[str] = "creativecommons"
+    legal_only: bool = False
     safe_search: bool = True
 
     def to_ia(self) -> str:
-        query = []
+        query = [] + [f'"{self.query}"'] if self.query else []
 
         if self.title:
             query.append(f'title:"{self.title}"')
@@ -66,29 +95,26 @@ class MovieSearchQuery:
         if self.year:
             query.append(f'year:{self.year}')
 
-        if self.genres:
+        if self.safe_search or self.genres or FORCE_GENRES:
 
             safe_search_insert = ""
-            genres = self.genres
-            if self.safe_search:
-                genres = [genre for genre in genres if genre.lower() not in BLOCKED_SUBJECTS]
-                safe_search_insert = " AND NOT " + f'({" OR ".join([f"({genre})" for genre in BLOCKED_SUBJECTS])})'
+            genres = self.genres + GENRES if FORCE_GENRES else self.genres
+            genres = list(set([genre.lower() for genre in genres if (genre not in BLOCKED_SUBJECTS and self.safe_search) or (not self.safe_search)]))
 
-            if len(self.genres) > 1:
-                query.append(f'subject:({" OR ".join([f"({genre})" for genre in self.genres])} {safe_search_insert})')
-            else:
-                query.append(f'subject:"{self.genres[0]}"')
+            if self.safe_search:
+                safe_search_insert = " AND NOT " + '(' + ' OR '.join([f'"{block}"' for block in BLOCKED_SUBJECTS]) + ')'
+
+            subject = f'subject:(' + ' OR '.join([f'"{genre}"' for genre in genres]) + ' ' + safe_search_insert + ')'
+            genre = f'genre:(' + ' OR '.join([f'"{genre}"' for genre in genres]) + ' ' + safe_search_insert + ')'
+            query.append(f"({subject} OR {genre})")
 
         if self.creator:
             query.append(f'creator:"{self.creator}"')
 
         if self.languages:
-            if len(self.languages) > 1:
-                query.append(f'language:({" OR ".join([f"({language})" for language in self.languages])})')
-            else:
-                query.append(f'language:"{self.languages[0]}"')
+            query.append('language:(' + ' OR '.join([f'"{language}"' for language in self.languages]) + ')')
 
-        if self.license:
+        if self.legal_only:
             query.append(f'licenseurl:http*{self.license}*')
         return " AND ".join(query)
 
@@ -101,26 +127,27 @@ class InternetArchiveClient:
             self._session = session
         elif CONFIG_FILE.exists():
             self._session = ia.get_session(config_file=str(CONFIG_FILE))
-        self.url = 'https://archive.org/services/search/v1/scrape'
+        self.url = 'https://archive.org/advancedsearch.php'
         self.max_count = 10_000
         self.base_query = "mediatype:movies"
 
     def search(
         self,
         query: MovieSearchQuery,
-        page_size: int = 100,
-        cursor: Optional[str] = None,
+        rows: int = 100,
+        page: int = 1,
     ) -> tuple[dict, Optional[dict]]:
-
-        page_size = max(100, min(page_size, self.max_count))
 
         params = {
             "q": f"{self.base_query} AND {query.to_ia()}",
-            "fields": ",".join(FIELDS),
-            'count': min(page_size, self.max_count),
-            "sorts": "downloads desc",
-            "cursor": cursor if cursor else None,
+            "fl[]": FIELDS,
+            "sort[]": ["downloads desc"],
+            'rows': min(rows, self.max_count),
+            'page': page,
+            'output': 'json',
         }
+
+        print(params['q'])
 
         response = requests.get(self.url, params=params)
 
@@ -134,39 +161,24 @@ if __name__ == "__main__":
 
     client = InternetArchiveClient()
 
-    query = MovieSearchQuery(genres=["sci-fi", 'science fiction'])
+    query = MovieSearchQuery()
 
     count = 0
     page = 1
     total = 300
-    page_size = 100
-    cursor = None
+    rows = 100
 
     out_dir = Path('output')
     os.system(f'rm -rf {out_dir}')
     os.makedirs(out_dir, exist_ok=True)
 
     while True:
-        result, error = client.search(query=query, page_size=page_size, cursor=cursor)
+        result, error = client.search(query=query, rows=rows, page=page)
         if error:
             print(error)
             break
-
-        print(result.keys())
-        print(result.get("cursor"))
-        print(result.get("previous", None))
-
-        new_cursor = result.get("cursor")
-
-        if new_cursor != cursor:
-            print(f"Updating cursor to {new_cursor} from {cursor}")
-        else:
-            print(f"New cursor is the same as the old: {new_cursor}")
-
-    
-        cursor = new_cursor
         
-        dictionary = result.get("items")
+        dictionary = result.get("response").get("docs")
         if not dictionary:
             break
 
@@ -176,15 +188,16 @@ if __name__ == "__main__":
             f.write(f'{len(dictionary)} items on this page\n\n')
             for item in dictionary:
                 f.write(item.get("title") + '\n')
-                f.write('\t' "Downloads: " + str(item.get("downloads")) + '\n')
-                f.write('\t' "Language: " + str(item.get("language")) + '\n')
-                f.write('\t' "Creator: " + str(item.get("creator")) + '\n')
-                f.write('\t' "Year: " + str(item.get("year")) + '\n')
+                f.write('\t' "Genre: " + str(item.get("genre")) + '\n')
+                f.write('\t' "Subject: " + str(item.get("subject")) + '\n')
+                # f.write('\t' "Creator: " + str(item.get("creator")) + '\n')
+                # f.write('\t' "Year: " + str(item.get("year")) + '\n')
+                # f.write('\t' "Downloads: " + str(item.get("downloads")) + '\n')
                 f.write('\n')
 
         count += found
 
-        if found < page_size:
+        if found < rows:
             break
         
         if count >= total:
